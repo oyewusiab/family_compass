@@ -18,10 +18,39 @@ import {
 } from './mockData';
 import { db } from './firebase';
 import { 
-  collection, doc, getDoc, getDocs, setDoc, updateDoc, 
+  collection, doc, getDoc, getDocs, 
+  setDoc as firestoreSetDoc, 
+  updateDoc as firestoreUpdateDoc, 
   query, where, deleteDoc, runTransaction 
 } from 'firebase/firestore';
 import { config } from './config';
+
+// Helper to strip undefined values before passing to Firestore
+const cleanData = (obj: any): any => {
+  if (obj === null || typeof obj !== 'object') {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(cleanData);
+  }
+  const result = { ...obj } as any;
+  Object.keys(result).forEach(key => {
+    if (result[key] === undefined) {
+      delete result[key];
+    } else if (typeof result[key] === 'object') {
+      result[key] = cleanData(result[key]);
+    }
+  });
+  return result;
+};
+
+const setDoc = async (documentRef: any, data: any, options?: any) => {
+  return firestoreSetDoc(documentRef, cleanData(data), options);
+};
+
+const updateDoc = async (documentRef: any, data: any) => {
+  return firestoreUpdateDoc(documentRef, cleanData(data));
+};
 
 // --- LocalStorage Helpers ---
 const loadLocal = <T>(key: string, defaultValue: T): T => {
