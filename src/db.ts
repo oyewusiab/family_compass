@@ -182,7 +182,15 @@ const baseDbService = {
   },
 
   // 3. Create Family (Admin flow)
-  async createFamily(familyName: string, missionStatement: string, creatorName: string, uid?: string): Promise<{ family: Family, member: Member }> {
+  async createFamily(
+    familyName: string, 
+    missionStatement: string, 
+    creatorName: string, 
+    uid?: string, 
+    username?: string, 
+    password?: string, 
+    displayRole?: string
+  ): Promise<{ family: Family, member: Member }> {
     const familyId = config.mode === 'firebase' ? doc(collection(db!, 'families')).id : `fam-${Date.now()}`;
     const inviteCode = generateInviteCode();
     
@@ -200,8 +208,11 @@ const baseDbService = {
       familyId,
       name: creatorName,
       role: 'parent',
+      displayRole: displayRole || 'Parent',
       points: 0,
       authUserId: uid || undefined,
+      username: username || undefined,
+      password: password || undefined,
       createdAt: new Date().toISOString()
     };
 
@@ -210,9 +221,15 @@ const baseDbService = {
       await setDoc(doc(db, 'families', familyId), newFamily);
       // Write parent member doc
       await setDoc(doc(db, `families/${familyId}/members`, memberId), newMember);
+      
       // Write user mapping if authenticated
       if (uid) {
         await setDoc(doc(db, 'users_mapping', uid), { familyId, memberId });
+      }
+      // Write username mapping if provided
+      if (username && password) {
+        const formatted = username.trim().toLowerCase();
+        await setDoc(doc(db, 'usernames', formatted), { familyId, memberId, password });
       }
     } else {
       saveLocal('family', newFamily);
@@ -229,7 +246,16 @@ const baseDbService = {
   },
 
   // 4. Join Family (Member flow)
-  async joinFamily(inviteCode: string, name: string, role: 'parent' | 'child', age?: number, uid?: string): Promise<{ family: Family, member: Member } | null> {
+  async joinFamily(
+    inviteCode: string, 
+    name: string, 
+    role: 'parent' | 'child' | 'grandparent', 
+    age?: number, 
+    uid?: string, 
+    username?: string, 
+    password?: string, 
+    displayRole?: string
+  ): Promise<{ family: Family, member: Member } | null> {
     const family = await this.getFamilyByInviteCode(inviteCode);
     if (!family) return null;
 
@@ -241,16 +267,24 @@ const baseDbService = {
       familyId,
       name,
       role,
+      displayRole: displayRole || (role === 'parent' ? 'Parent' : role === 'child' ? 'Child' : 'Grandparent'),
       age: age || undefined,
       points: 0,
       authUserId: uid || undefined,
+      username: username || undefined,
+      password: password || undefined,
       createdAt: new Date().toISOString()
     };
 
     if (config.mode === 'firebase' && db) {
       await setDoc(doc(db, `families/${familyId}/members`, memberId), newMember);
+      
       if (uid) {
         await setDoc(doc(db, 'users_mapping', uid), { familyId, memberId });
+      }
+      if (username && password) {
+        const formatted = username.trim().toLowerCase();
+        await setDoc(doc(db, 'usernames', formatted), { familyId, memberId, password });
       }
     } else {
       const members = loadLocal<Member[]>('members', defaultMembers);
@@ -280,6 +314,54 @@ const baseDbService = {
     } else {
       const members = loadLocal<Member[]>('members', defaultMembers);
       return members.find(m => m.id === memberId && m.familyId === familyId) || null;
+    }
+  },
+
+  // Check if a username is already taken globally
+  async isUsernameTaken(username: string): Promise<boolean> {
+    const formatted = username.trim().toLowerCase();
+    if (config.mode === 'firebase' && db) {
+      const docRef = doc(db, 'usernames', formatted);
+      const snap = await getDoc(docRef);
+      return snap.exists();
+    } else {
+      const members = loadLocal<Member[]>('members', defaultMembers);
+      return members.some(m => m.username?.toLowerCase() === formatted);
+    }
+  },
+
+  // Authenticate member with username and password
+  async loginWithUsernamePassword(username: string, password: string): Promise<{ family: Family, member: Member }> {
+    const formatted = username.trim().toLowerCase();
+    if (config.mode === 'firebase' && db) {
+      const docRef = doc(db, 'usernames', formatted);
+      const snap = await getDoc(docRef);
+      if (!snap.exists()) {
+        throw new Error('Invalid username or password.');
+      }
+      const data = snap.data() as { familyId: string, memberId: string, password?: string };
+      if (data.password !== password) {
+        throw new Error('Invalid username or password.');
+      }
+      const [family, member] = await Promise.all([
+        this.getFamily(data.familyId),
+        this.getMember(data.familyId, data.memberId)
+      ]);
+      if (!family || !member) {
+        throw new Error('Family or member profile not found.');
+      }
+      return { family, member };
+    } else {
+      const members = loadLocal<Member[]>('members', defaultMembers);
+      const member = members.find(m => m.username?.toLowerCase() === formatted && m.password === password);
+      if (!member) {
+        throw new Error('Invalid username or password.');
+      }
+      const family = await this.getFamily(member.familyId);
+      if (!family) {
+        throw new Error('Associated family not found.');
+      }
+      return { family, member };
     }
   },
 

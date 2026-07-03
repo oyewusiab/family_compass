@@ -19,22 +19,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onLoginSuccess,
   onLogout
 }) => {
-  const [tab, setTab] = useState<'quick' | 'google' | 'create' | 'join'>(
-    config.mode === 'firebase' ? 'google' : 'quick'
+  // Top-level choice: 'signup' or 'login'
+  const [mainTab, setMainTab] = useState<'signup' | 'login'>('login');
+  
+  // Sub-tabs inside Sign Up: 'testing' | 'create' | 'join'
+  const [signUpTab, setSignUpTab] = useState<'testing' | 'create' | 'join'>(
+    config.mode === 'offline' ? 'testing' : 'create'
   );
   
-  // Auth state
+  // Sub-tabs inside Log In: 'credentials' | 'google'
+  const [logInTab, setLogInTab] = useState<'credentials' | 'google'>(
+    config.mode === 'firebase' ? 'google' : 'credentials'
+  );
+
+  // Auth states
   const [googleUser, setGoogleUser] = useState<any>(null);
 
-  // Form states
+  // Create Family Form
   const [creatorName, setCreatorName] = useState('');
+  const [creatorRole, setCreatorRole] = useState<'Father' | 'Mother'>('Father');
   const [familyName, setFamilyName] = useState('');
   const [missionStatement, setMissionStatement] = useState('');
+  const [createUsername, setCreateUsername] = useState('');
+  const [createPassword, setCreatePassword] = useState('');
+
+  // Join Family Form
   const [inviteCode, setInviteCode] = useState('');
   const [joinName, setJoinName] = useState('');
-  const [joinRole, setJoinRole] = useState<'parent' | 'child'>('child');
+  const [joinRole, setJoinRole] = useState<'Father' | 'Mother' | 'child' | 'grandparent'>('child');
   const [joinAge, setJoinAge] = useState('');
-  
+  const [joinUsername, setJoinUsername] = useState('');
+  const [joinPassword, setJoinPassword] = useState('');
+
+  // Log In Username/Password Form
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
   const [newFamilyDetails, setNewFamilyDetails] = useState<{ family: Family; member: Member } | null>(null);
@@ -73,27 +93,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
       
-      // Look up if user has a family mapping
-      const mapping = await dbService.getUserMapping(user.uid);
-      if (mapping) {
-        // Fetch family and member details
-        const [family, member] = await Promise.all([
-          dbService.getFamily(mapping.familyId),
-          dbService.getMember(mapping.familyId, mapping.memberId)
-        ]);
-        
-        if (family && member) {
-          onLoginSuccess(family, member);
+      try {
+        const mapping = await dbService.getUserMapping(user.uid);
+        if (mapping) {
+          const [family, member] = await Promise.all([
+            dbService.getFamily(mapping.familyId),
+            dbService.getMember(mapping.familyId, mapping.memberId)
+          ]);
+          
+          if (family && member) {
+            onLoginSuccess(family, member);
+          } else {
+            setError('Failed to load your family profile. Try logging in again.');
+          }
         } else {
-          setError('Failed to load your family profile. Try logging in again.');
+          setGoogleUser(user);
+          setCreatorName(user.displayName || '');
+          setJoinName(user.displayName || '');
+          setMainTab('signup');
+          setSignUpTab('create');
+          setError('Google authenticated! Please Create or Join a family below to complete your registration.');
         }
-      } else {
-        // Authenticated but unregistered: save user and navigate to create/join
-        setGoogleUser(user);
-        setCreatorName(user.displayName || '');
-        setJoinName(user.displayName || '');
-        setTab('create');
-        setError('Google account authenticated! Please create a new family or enter an invite code to join an existing one.');
+      } catch (dbErr: any) {
+        console.error(dbErr);
+        if (dbErr.message?.includes('offline') || dbErr.message?.includes('permission')) {
+          setError('⚠️ Connection failed: Please verify that you have initialized "Firestore Database" in your Firebase Console and that its Security Rules are set to Test Mode.');
+        } else {
+          setError(dbErr.message || 'Database connection error.');
+        }
       }
     } catch (err: any) {
       console.error(err);
@@ -105,19 +132,38 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     e.preventDefault();
     setError('');
 
-    if (config.mode === 'firebase' && !googleUser) {
-      setError('You must sign in with Google first before creating a family.');
-      setTab('google');
-      return;
-    }
-
     if (!creatorName || !familyName) {
       setError('Please fill in creator name and family name.');
       return;
     }
 
+    if (createUsername || createPassword) {
+      if (!createUsername || !createPassword) {
+        setError('If setting up username login, please provide both username and password.');
+        return;
+      }
+      try {
+        const taken = await dbService.isUsernameTaken(createUsername);
+        if (taken) {
+          setError('Username is already taken. Please choose another username.');
+          return;
+        }
+      } catch (err) {
+        setError('Error checking username availability. Make sure Firestore is created.');
+        return;
+      }
+    }
+
     try {
-      const result = await dbService.createFamily(familyName, missionStatement, creatorName, googleUser?.uid);
+      const result = await dbService.createFamily(
+        familyName,
+        missionStatement,
+        creatorName,
+        googleUser?.uid,
+        createUsername || undefined,
+        createPassword || undefined,
+        creatorRole
+      );
       setNewFamilyDetails(result);
       if (config.mode === 'offline') {
         const data = localStorage.getItem('fc_members');
@@ -132,24 +178,45 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     e.preventDefault();
     setError('');
 
-    if (config.mode === 'firebase' && !googleUser) {
-      setError('You must sign in with Google first before joining a family.');
-      setTab('google');
-      return;
-    }
-
     if (!joinName || !inviteCode) {
       setError('Please fill in your name and the family invite code.');
       return;
+    }
+
+    if (joinUsername || joinPassword) {
+      if (!joinUsername || !joinPassword) {
+        setError('If setting up username login, please provide both username and password.');
+        return;
+      }
+      try {
+        const taken = await dbService.isUsernameTaken(joinUsername);
+        if (taken) {
+          setError('Username is already taken. Please choose another username.');
+          return;
+        }
+      } catch (err) {
+        setError('Error checking username availability. Make sure Firestore is created.');
+        return;
+      }
+    }
+
+    let mappedRole: 'parent' | 'child' | 'grandparent' = 'child';
+    if (joinRole === 'Father' || joinRole === 'Mother') {
+      mappedRole = 'parent';
+    } else if (joinRole === 'grandparent') {
+      mappedRole = 'grandparent';
     }
 
     try {
       const result = await dbService.joinFamily(
         inviteCode,
         joinName,
-        joinRole,
+        mappedRole,
         joinAge ? parseInt(joinAge) : undefined,
-        googleUser?.uid
+        googleUser?.uid,
+        joinUsername || undefined,
+        joinPassword || undefined,
+        joinRole
       );
 
       if (result) {
@@ -159,6 +226,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
     } catch (err: any) {
       setError(err.message || 'Failed to join family.');
+    }
+  };
+
+  const handleUsernameLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!loginUsername || !loginPassword) {
+      setError('Please enter both username and password.');
+      return;
+    }
+
+    try {
+      const result = await dbService.loginWithUsernamePassword(loginUsername, loginPassword);
+      onLoginSuccess(result.family, result.member);
+    } catch (err: any) {
+      setError(err.message || 'Failed to login. Please verify username and password.');
     }
   };
 
@@ -197,7 +280,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <div>
               <h3 style={{ fontSize: '1.25rem' }}>Logged in as {currentMember.name}</h3>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                Role: <span className="badge badge-completed">{currentMember.role}</span>
+                Role: <span className="badge badge-completed">{currentMember.displayRole || currentMember.role}</span>
               </p>
             </div>
           </div>
@@ -231,7 +314,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       ) : (
         <div className="glass-card animate-fade-in" style={{
           padding: '2.5rem',
-          maxWidth: '550px',
+          maxWidth: '650px',
           width: '100%',
           boxShadow: 'var(--shadow-lg)'
         }}>
@@ -245,277 +328,423 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </p>
           </div>
 
-          {/* Tab Navigation */}
-          <div className="tab-container" style={{ width: '100%' }}>
-            {config.mode === 'offline' ? (
-              <button
-                onClick={() => { setTab('quick'); setNewFamilyDetails(null); }}
-                className={`tab-btn ${tab === 'quick' ? 'active' : ''}`}
-                style={{ flex: 1 }}
-              >
-                Quick Test
-              </button>
+          {/* MAIN TABS: SIGN UP vs LOG IN */}
+          <div className="tab-container" style={{ width: '100%', marginBottom: '1.5rem', borderBottom: '2px solid var(--border-color)' }}>
+            <button
+              onClick={() => { setMainTab('signup'); setError(''); }}
+              className={`tab-btn ${mainTab === 'signup' ? 'active' : ''}`}
+              style={{ flex: 1, padding: '1rem', fontSize: '1.05rem', fontWeight: 'bold' }}
+            >
+              Sign up
+            </button>
+            <button
+              onClick={() => { setMainTab('login'); setError(''); }}
+              className={`tab-btn ${mainTab === 'login' ? 'active' : ''}`}
+              style={{ flex: 1, padding: '1rem', fontSize: '1.05rem', fontWeight: 'bold' }}
+            >
+              Log in
+            </button>
+          </div>
+
+          {/* SUB-TABS BASED ON MAIN TAB */}
+          <div className="tab-container" style={{ width: '100%', marginBottom: '1.5rem', background: 'rgba(var(--primary-rgb), 0.03)', padding: '4px', borderRadius: '12px' }}>
+            {mainTab === 'signup' ? (
+              <>
+                {config.mode === 'offline' && (
+                  <button
+                    onClick={() => { setSignUpTab('testing'); setNewFamilyDetails(null); }}
+                    className={`tab-btn ${signUpTab === 'testing' ? 'active' : ''}`}
+                    style={{ flex: 1, padding: '0.5rem' }}
+                  >
+                    Testing Mode
+                  </button>
+                )}
+                <button
+                  onClick={() => { setSignUpTab('create'); setNewFamilyDetails(null); }}
+                  className={`tab-btn ${signUpTab === 'create' ? 'active' : ''}`}
+                  style={{ flex: 1, padding: '0.5rem' }}
+                >
+                  Create Family
+                </button>
+                <button
+                  onClick={() => { setSignUpTab('join'); setNewFamilyDetails(null); }}
+                  className={`tab-btn ${signUpTab === 'join' ? 'active' : ''}`}
+                  style={{ flex: 1, padding: '0.5rem' }}
+                >
+                  Join Family
+                </button>
+              </>
             ) : (
-              <button
-                onClick={() => { setTab('google'); setNewFamilyDetails(null); }}
-                className={`tab-btn ${tab === 'google' ? 'active' : ''}`}
-                style={{ flex: 1 }}
-              >
-                Google Sign In
-              </button>
+              <>
+                <button
+                  onClick={() => setLogInTab('credentials')}
+                  className={`tab-btn ${logInTab === 'credentials' ? 'active' : ''}`}
+                  style={{ flex: 1, padding: '0.5rem' }}
+                >
+                  User Name/Password
+                </button>
+                {config.mode === 'firebase' && (
+                  <button
+                    onClick={() => setLogInTab('google')}
+                    className={`tab-btn ${logInTab === 'google' ? 'active' : ''}`}
+                    style={{ flex: 1, padding: '0.5rem' }}
+                  >
+                    Google
+                  </button>
+                )}
+              </>
             )}
-            <button
-              onClick={() => { setTab('create'); setNewFamilyDetails(null); }}
-              className={`tab-btn ${tab === 'create' ? 'active' : ''}`}
-              style={{ flex: 1 }}
-            >
-              Create Family
-            </button>
-            <button
-              onClick={() => { setTab('join'); setNewFamilyDetails(null); }}
-              className={`tab-btn ${tab === 'join' ? 'active' : ''}`}
-              style={{ flex: 1 }}
-            >
-              Join Family
-            </button>
           </div>
 
           {error && (
             <div style={{
-              backgroundColor: error.includes('authenticated') ? 'rgba(59, 130, 246, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-              color: error.includes('authenticated') ? 'var(--primary-color)' : 'var(--danger-color)',
+              backgroundColor: error.includes('authenticated') || error.includes('✓') ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+              color: error.includes('authenticated') || error.includes('✓') ? 'var(--success-color)' : 'var(--danger-color)',
               padding: '0.75rem 1rem',
               borderRadius: '8px',
               fontSize: '0.85rem',
               marginBottom: '1.25rem',
               fontWeight: '600'
             }}>
-              {error.includes('authenticated') ? '✓' : '⚠️'} {error}
+              {error.includes('authenticated') || error.includes('✓') ? '✓' : '⚠️'} {error}
             </div>
           )}
 
-          {/* 1. Offline Quick Login */}
-          {tab === 'quick' && config.mode === 'offline' && (
+          {/* SIGN UP CONTENT */}
+          {mainTab === 'signup' && (
             <div>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.25rem', textAlign: 'center' }}>
-                Select a family member below to log in instantly.
-              </p>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                {quickMembers.map((member) => (
-                  <div
-                    key={member.id}
-                    onClick={() => handleQuickLogin(member)}
-                    className="glass-card"
-                    style={{
-                      padding: '1.25rem',
-                      borderRadius: '12px',
-                      cursor: 'pointer',
-                      textAlign: 'center',
-                      backgroundColor: 'rgba(var(--primary-rgb), 0.02)'
-                    }}
-                  >
-                    <div style={{
-                      width: '44px',
-                      height: '44px',
-                      borderRadius: '50%',
-                      backgroundColor: member.role === 'parent' ? 'var(--primary-color)' : 'var(--accent-gold)',
-                      color: '#ffffff',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      margin: '0 auto 0.75rem',
-                      fontWeight: 'bold'
-                    }}>
-                      {member.name.substring(0, 2).toUpperCase()}
-                    </div>
-                    <div style={{ fontWeight: '700' }}>{member.name}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      {member.role}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 2. Firebase Google Sign-In */}
-          {tab === 'google' && config.mode === 'firebase' && (
-            <div style={{ textAlign: 'center' }}>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-                Sign in with Google to access your family's live synchronized dashboard.
-              </p>
-              
-              <button 
-                onClick={handleGoogleSignIn}
-                className="btn btn-primary"
-                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem' }}
-              >
-                <LogIn size={20} /> Sign In with Google
-              </button>
-            </div>
-          )}
-
-          {/* 3. Create Family */}
-          {tab === 'create' && (
-            <div>
-              {googleUser && (
-                <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.05)', padding: '0.75rem', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--success-color)', marginBottom: '1rem', fontWeight: 'bold' }}>
-                  Authenticated as: {googleUser.email}
+              {/* google helper badge */}
+              {config.mode === 'firebase' && googleUser && (
+                <div style={{ backgroundColor: 'rgba(59, 130, 246, 0.05)', padding: '0.75rem', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--primary-color)', marginBottom: '1.25rem', fontWeight: 'bold' }}>
+                  Authenticated: {googleUser.email} (UID: {googleUser.uid.substring(0, 8)}...)
                 </div>
               )}
-              {!newFamilyDetails ? (
-                <form onSubmit={handleCreateFamily}>
+              {config.mode === 'firebase' && !googleUser && (
+                <div className="glass-panel" style={{ padding: '1rem', marginBottom: '1.5rem', textAlign: 'center', borderColor: 'rgba(245, 158, 11, 0.3)' }}>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+                    Tip: Google Sign-in is active. To link this new family profile securely to your Google account, click Google under "Log in" first!
+                  </p>
+                </div>
+              )}
+
+              {/* Sub-Tab 1: Testing Mode */}
+              {signUpTab === 'testing' && config.mode === 'offline' && (
+                <div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.25rem', textAlign: 'center' }}>
+                    Select a simulated family member below to log in instantly.
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
+                    {quickMembers.map((member) => (
+                      <div
+                        key={member.id}
+                        onClick={() => handleQuickLogin(member)}
+                        className="glass-card"
+                        style={{
+                          padding: '1.25rem',
+                          borderRadius: '12px',
+                          cursor: 'pointer',
+                          textAlign: 'center',
+                          backgroundColor: 'rgba(var(--primary-rgb), 0.02)'
+                        }}
+                      >
+                        <div style={{
+                          width: '44px',
+                          height: '44px',
+                          borderRadius: '50%',
+                          backgroundColor: member.role === 'parent' ? 'var(--primary-color)' : 'var(--accent-gold)',
+                          color: '#ffffff',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          margin: '0 auto 0.75rem',
+                          fontWeight: 'bold'
+                        }}>
+                          {member.name.substring(0, 2).toUpperCase()}
+                        </div>
+                        <div style={{ fontWeight: '700' }}>{member.name}</div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          {member.displayRole || member.role}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-Tab 2: Create Family */}
+              {signUpTab === 'create' && (
+                <div>
+                  {!newFamilyDetails ? (
+                    <form onSubmit={handleCreateFamily}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        <div className="form-group">
+                          <label className="form-label">Your Name (Parent)</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Sarah Smith"
+                            value={creatorName}
+                            onChange={(e) => setCreatorName(e.target.value)}
+                            className="input-field"
+                            style={{ width: '100%' }}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label">Role</label>
+                          <select
+                            value={creatorRole}
+                            onChange={(e) => setCreatorRole(e.target.value as any)}
+                            className="input-field"
+                            style={{ width: '100%', height: '42px' }}
+                          >
+                            <option value="Father">Father</option>
+                            <option value="Mother">Mother</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">Family Name</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. The Smith Family"
+                          value={familyName}
+                          onChange={(e) => setFamilyName(e.target.value)}
+                          className="input-field"
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">Family Mission Statement (Optional)</label>
+                        <textarea
+                          placeholder="Define your family's core values..."
+                          value={missionStatement}
+                          onChange={(e) => setMissionStatement(e.target.value)}
+                          className="input-field"
+                          style={{ width: '100%', minHeight: '60px', resize: 'vertical' }}
+                        />
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
+                        <div className="form-group">
+                          <label className="form-label">Username (Optional)</label>
+                          <input
+                            type="text"
+                            placeholder="Choose username"
+                            value={createUsername}
+                            onChange={(e) => setCreateUsername(e.target.value)}
+                            className="input-field"
+                            style={{ width: '100%' }}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label">Password (Optional)</label>
+                          <input
+                            type="password"
+                            placeholder="Choose password"
+                            value={createPassword}
+                            onChange={(e) => setCreatePassword(e.target.value)}
+                            className="input-field"
+                            style={{ width: '100%' }}
+                          />
+                        </div>
+                      </div>
+
+                      <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
+                        Create Family & Get Invite Code
+                      </button>
+                    </form>
+                  ) : (
+                    <div style={{ textAlign: 'center', padding: '1rem 0' }} className="animate-fade-in">
+                      <div style={{
+                        width: '60px',
+                        height: '60px',
+                        borderRadius: '50%',
+                        backgroundColor: 'rgba(5, 150, 105, 0.1)',
+                        color: 'var(--success-color)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginBottom: '1rem'
+                      }}>
+                        <Check size={32} />
+                      </div>
+                      <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Family Created!</h3>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
+                        Share this invite code with other family members so they can join.
+                      </p>
+
+                      <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: '12px', margin: '0 auto 1.5rem' }}>
+                        <div style={{ textTransform: 'uppercase', fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                          Invite Code
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
+                          <span style={{ fontSize: '1.75rem', fontWeight: '800', letterSpacing: '2px', color: 'var(--accent-gold)' }}>
+                            {newFamilyDetails.family.inviteCode}
+                          </span>
+                          <button 
+                            onClick={() => copyToClipboard(newFamilyDetails.family.inviteCode)}
+                            className="btn btn-secondary"
+                            style={{ padding: '0.5rem' }}
+                          >
+                            {copied ? 'Copied!' : <Clipboard size={18} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <button 
+                        onClick={() => handleQuickLogin(newFamilyDetails.member)}
+                        className="btn btn-primary" 
+                        style={{ width: '100%' }}
+                      >
+                        Enter Dashboard as {newFamilyDetails.member.name}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Sub-Tab 3: Join Family */}
+              {signUpTab === 'join' && (
+                <form onSubmit={handleJoinFamily}>
                   <div className="form-group">
-                    <label className="form-label">Your Name (Parent)</label>
+                    <label className="form-label">Invite Code</label>
                     <input
                       type="text"
-                      placeholder="e.g., Sarah Smith"
-                      value={creatorName}
-                      onChange={(e) => setCreatorName(e.target.value)}
+                      placeholder="e.g. FAM-123-456"
+                      value={inviteCode}
+                      onChange={(e) => setInviteCode(e.target.value)}
+                      className="input-field"
+                      style={{ width: '100%', textTransform: 'uppercase' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem' }}>
+                    <div className="form-group">
+                      <label className="form-label">Your Name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Emily"
+                        value={joinName}
+                        onChange={(e) => setJoinName(e.target.value)}
+                        className="input-field"
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Age</label>
+                      <input
+                        type="number"
+                        placeholder="e.g. 10"
+                        value={joinAge}
+                        onChange={(e) => setJoinAge(e.target.value)}
+                        className="input-field"
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Role</label>
+                    <select
+                      value={joinRole}
+                      onChange={(e) => setJoinRole(e.target.value as any)}
+                      className="input-field"
+                      style={{ width: '100%', height: '42px' }}
+                    >
+                      <option value="child">Child</option>
+                      <option value="Father">Father</option>
+                      <option value="Mother">Mother</option>
+                      <option value="grandparent">Grandparent</option>
+                    </select>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
+                    <div className="form-group">
+                      <label className="form-label">Username (Optional)</label>
+                      <input
+                        type="text"
+                        placeholder="Choose username"
+                        value={joinUsername}
+                        onChange={(e) => setJoinUsername(e.target.value)}
+                        className="input-field"
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Password (Optional)</label>
+                      <input
+                        type="password"
+                        placeholder="Choose password"
+                        value={joinPassword}
+                        onChange={(e) => setJoinPassword(e.target.value)}
+                        className="input-field"
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                  </div>
+
+                  <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
+                    Join Family Dashboard
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
+
+          {/* LOG IN CONTENT */}
+          {mainTab === 'login' && (
+            <div>
+              {/* Sub-Tab 1: Credentials Login */}
+              {logInTab === 'credentials' && (
+                <form onSubmit={handleUsernameLogin}>
+                  <div className="form-group">
+                    <label className="form-label">Username</label>
+                    <input
+                      type="text"
+                      placeholder="Enter username"
+                      value={loginUsername}
+                      onChange={(e) => setLoginUsername(e.target.value)}
                       className="input-field"
                       style={{ width: '100%' }}
                     />
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Family Name</label>
+                    <label className="form-label">Password</label>
                     <input
-                      type="text"
-                      placeholder="e.g., The Smith Family"
-                      value={familyName}
-                      onChange={(e) => setFamilyName(e.target.value)}
+                      type="password"
+                      placeholder="Enter password"
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
                       className="input-field"
                       style={{ width: '100%' }}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Family Mission Statement (Optional)</label>
-                    <textarea
-                      placeholder="Define your family's core values and spiritual focus..."
-                      value={missionStatement}
-                      onChange={(e) => setMissionStatement(e.target.value)}
-                      className="input-field"
-                      style={{ width: '100%', minHeight: '80px', resize: 'vertical' }}
                     />
                   </div>
 
                   <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
-                    Create Family & Get Invite Code
+                    Log In
                   </button>
                 </form>
-              ) : (
-                <div style={{ textAlign: 'center', padding: '1rem 0' }} className="animate-fade-in">
-                  <div style={{
-                    width: '60px',
-                    height: '60px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(5, 150, 105, 0.1)',
-                    color: 'var(--success-color)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginBottom: '1rem'
-                  }}>
-                    <Check size={32} />
-                  </div>
-                  <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Family Created!</h3>
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
-                    Share this invite code with other family members so they can join.
+              )}
+
+              {/* Sub-Tab 2: Google Sign In */}
+              {logInTab === 'google' && config.mode === 'firebase' && (
+                <div style={{ textAlign: 'center', padding: '1rem 0' }}>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', marginBottom: '1.5rem' }}>
+                    Sign in securely with Google to access your family's synchronized dashboard.
                   </p>
-
-                  <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: '12px', margin: '0 auto 1.5rem' }}>
-                    <div style={{ textTransform: 'uppercase', fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                      Invite Code
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
-                      <span style={{ fontSize: '1.75rem', fontWeight: '800', letterSpacing: '2px', color: 'var(--accent-gold)' }}>
-                        {newFamilyDetails.family.inviteCode}
-                      </span>
-                      <button 
-                        onClick={() => copyToClipboard(newFamilyDetails.family.inviteCode)}
-                        className="btn btn-secondary"
-                        style={{ padding: '0.5rem' }}
-                      >
-                        {copied ? 'Copied!' : <Clipboard size={18} />}
-                      </button>
-                    </div>
-                  </div>
-
+                  
                   <button 
-                    onClick={() => handleQuickLogin(newFamilyDetails.member)}
-                    className="btn btn-primary" 
-                    style={{ width: '100%' }}
+                    onClick={handleGoogleSignIn}
+                    className="btn btn-primary"
+                    style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', fontSize: '1rem' }}
                   >
-                    Enter Dashboard as {newFamilyDetails.member.name}
+                    <LogIn size={20} /> Sign In with Google
                   </button>
                 </div>
               )}
             </div>
-          )}
-
-          {/* 4. Join Family */}
-          {tab === 'join' && (
-            <form onSubmit={handleJoinFamily}>
-              {googleUser && (
-                <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.05)', padding: '0.75rem', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--success-color)', marginBottom: '1rem', fontWeight: 'bold' }}>
-                  Authenticated as: {googleUser.email}
-                </div>
-              )}
-              <div className="form-group">
-                <label className="form-label">Invite Code</label>
-                <input
-                  type="text"
-                  placeholder="e.g. FAM-123-456"
-                  value={inviteCode}
-                  onChange={(e) => setInviteCode(e.target.value)}
-                  className="input-field"
-                  style={{ width: '100%', textTransform: 'uppercase' }}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Your Name</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Brayden"
-                  value={joinName}
-                  onChange={(e) => setJoinName(e.target.value)}
-                  className="input-field"
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Role</label>
-                  <select
-                    value={joinRole}
-                    onChange={(e) => setJoinRole(e.target.value as any)}
-                    className="input-field"
-                    style={{ width: '100%', height: '42px' }}
-                  >
-                    <option value="child">Child</option>
-                    <option value="parent">Parent</option>
-                  </select>
-                </div>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Age (Optional)</label>
-                  <input
-                    type="number"
-                    placeholder="e.g. 14"
-                    value={joinAge}
-                    onChange={(e) => setJoinAge(e.target.value)}
-                    className="input-field"
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              </div>
-
-              <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-                Join Family Dashboard
-              </button>
-            </form>
           )}
         </div>
       )}

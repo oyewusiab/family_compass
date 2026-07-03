@@ -10,10 +10,13 @@ export interface Member {
   id: string;
   familyId: string;
   name: string;
-  role: 'parent' | 'child';
+  role: 'parent' | 'child' | 'grandparent';
+  displayRole?: string; // e.g. 'Father', 'Mother', 'Child', 'Grandparent'
   age?: number;
   points: number;
   authUserId?: string; // Links to Firebase Auth user UID
+  username?: string; // For username/password logins
+  password?: string; // Simple plain-text password store
   createdAt: string;
 }
 
