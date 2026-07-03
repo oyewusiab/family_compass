@@ -1,6 +1,6 @@
 export const config = {
   // Toggle between 'offline' and 'firebase'
-  mode: (import.meta.env.VITE_FIREBASE_MODE || 'firebase') as 'offline' | 'firebase',
+  mode: (import.meta.env.VITE_FIREBASE_MODE || 'offline') as 'offline' | 'firebase',
 
   // Paste your Firebase Config object here from the Firebase Console (Project Settings -> General -> Web App)
   firebaseConfig: {
