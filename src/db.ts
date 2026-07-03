@@ -182,7 +182,7 @@ const baseDbService = {
   },
 
   // 3. Create Family (Admin flow)
-  async createFamily(familyName: string, missionStatement: string, creatorName: string): Promise<{ family: Family, member: Member }> {
+  async createFamily(familyName: string, missionStatement: string, creatorName: string, uid?: string): Promise<{ family: Family, member: Member }> {
     const familyId = config.mode === 'firebase' ? doc(collection(db!, 'families')).id : `fam-${Date.now()}`;
     const inviteCode = generateInviteCode();
     
@@ -201,6 +201,7 @@ const baseDbService = {
       name: creatorName,
       role: 'parent',
       points: 0,
+      authUserId: uid || undefined,
       createdAt: new Date().toISOString()
     };
 
@@ -209,6 +210,10 @@ const baseDbService = {
       await setDoc(doc(db, 'families', familyId), newFamily);
       // Write parent member doc
       await setDoc(doc(db, `families/${familyId}/members`, memberId), newMember);
+      // Write user mapping if authenticated
+      if (uid) {
+        await setDoc(doc(db, 'users_mapping', uid), { familyId, memberId });
+      }
     } else {
       saveLocal('family', newFamily);
       saveLocal('members', [newMember]);
@@ -224,7 +229,7 @@ const baseDbService = {
   },
 
   // 4. Join Family (Member flow)
-  async joinFamily(inviteCode: string, name: string, role: 'parent' | 'child', age?: number): Promise<{ family: Family, member: Member } | null> {
+  async joinFamily(inviteCode: string, name: string, role: 'parent' | 'child', age?: number, uid?: string): Promise<{ family: Family, member: Member } | null> {
     const family = await this.getFamilyByInviteCode(inviteCode);
     if (!family) return null;
 
@@ -238,11 +243,15 @@ const baseDbService = {
       role,
       age: age || undefined,
       points: 0,
+      authUserId: uid || undefined,
       createdAt: new Date().toISOString()
     };
 
     if (config.mode === 'firebase' && db) {
       await setDoc(doc(db, `families/${familyId}/members`, memberId), newMember);
+      if (uid) {
+        await setDoc(doc(db, 'users_mapping', uid), { familyId, memberId });
+      }
     } else {
       const members = loadLocal<Member[]>('members', defaultMembers);
       members.push(newMember);
@@ -250,6 +259,28 @@ const baseDbService = {
     }
 
     return { family, member: newMember };
+  },
+
+  // Find mapped user profile by firebase uid
+  async getUserMapping(uid: string): Promise<{ familyId: string, memberId: string } | null> {
+    if (config.mode === 'firebase' && db) {
+      const docRef = doc(db, 'users_mapping', uid);
+      const snap = await getDoc(docRef);
+      return snap.exists() ? (snap.data() as { familyId: string, memberId: string }) : null;
+    }
+    return null;
+  },
+
+  // Fetch a single member directly
+  async getMember(familyId: string, memberId: string): Promise<Member | null> {
+    if (config.mode === 'firebase' && db) {
+      const docRef = doc(db, `families/${familyId}/members`, memberId);
+      const snap = await getDoc(docRef);
+      return snap.exists() ? (snap.data() as Member) : null;
+    } else {
+      const members = loadLocal<Member[]>('members', defaultMembers);
+      return members.find(m => m.id === memberId && m.familyId === familyId) || null;
+    }
   },
 
   // 5. Get Members

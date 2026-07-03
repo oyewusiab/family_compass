@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { dbService } from '../db';
 import type { Family, Member } from '../types';
-import { Compass, Clipboard, Check } from 'lucide-react';
+import { Compass, Clipboard, Check, LogIn } from 'lucide-react';
 import { config } from '../config';
+import { auth, googleProvider } from '../firebase';
+import { signInWithPopup } from 'firebase/auth';
 
 interface AuthModalProps {
   currentMember: Member | null;
@@ -17,7 +19,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onLoginSuccess,
   onLogout
 }) => {
-  const [tab, setTab] = useState<'quick' | 'create' | 'join'>('quick');
+  const [tab, setTab] = useState<'quick' | 'google' | 'create' | 'join'>(
+    config.mode === 'firebase' ? 'google' : 'quick'
+  );
+  
+  // Auth state
+  const [googleUser, setGoogleUser] = useState<any>(null);
+
+  // Form states
   const [creatorName, setCreatorName] = useState('');
   const [familyName, setFamilyName] = useState('');
   const [missionStatement, setMissionStatement] = useState('');
@@ -25,6 +34,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [joinName, setJoinName] = useState('');
   const [joinRole, setJoinRole] = useState<'parent' | 'child'>('child');
   const [joinAge, setJoinAge] = useState('');
+  
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
   const [newFamilyDetails, setNewFamilyDetails] = useState<{ family: Family; member: Member } | null>(null);
@@ -52,18 +62,63 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
+  const handleGoogleSignIn = async () => {
+    setError('');
+    if (!auth || !googleProvider) {
+      setError('Firebase authentication is not initialized. Please verify your Vercel Environment Variables.');
+      return;
+    }
+
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+      
+      // Look up if user has a family mapping
+      const mapping = await dbService.getUserMapping(user.uid);
+      if (mapping) {
+        // Fetch family and member details
+        const [family, member] = await Promise.all([
+          dbService.getFamily(mapping.familyId),
+          dbService.getMember(mapping.familyId, mapping.memberId)
+        ]);
+        
+        if (family && member) {
+          onLoginSuccess(family, member);
+        } else {
+          setError('Failed to load your family profile. Try logging in again.');
+        }
+      } else {
+        // Authenticated but unregistered: save user and navigate to create/join
+        setGoogleUser(user);
+        setCreatorName(user.displayName || '');
+        setJoinName(user.displayName || '');
+        setTab('create');
+        setError('Google account authenticated! Please create a new family or enter an invite code to join an existing one.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Google Sign-In failed.');
+    }
+  };
+
   const handleCreateFamily = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (config.mode === 'firebase' && !googleUser) {
+      setError('You must sign in with Google first before creating a family.');
+      setTab('google');
+      return;
+    }
+
     if (!creatorName || !familyName) {
       setError('Please fill in creator name and family name.');
       return;
     }
 
     try {
-      const result = await dbService.createFamily(familyName, missionStatement, creatorName);
+      const result = await dbService.createFamily(familyName, missionStatement, creatorName, googleUser?.uid);
       setNewFamilyDetails(result);
-      // Update quick list
       if (config.mode === 'offline') {
         const data = localStorage.getItem('fc_members');
         if (data) setQuickMembers(JSON.parse(data));
@@ -76,6 +131,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleJoinFamily = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (config.mode === 'firebase' && !googleUser) {
+      setError('You must sign in with Google first before joining a family.');
+      setTab('google');
+      return;
+    }
+
     if (!joinName || !inviteCode) {
       setError('Please fill in your name and the family invite code.');
       return;
@@ -86,7 +148,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         inviteCode,
         joinName,
         joinRole,
-        joinAge ? parseInt(joinAge) : undefined
+        joinAge ? parseInt(joinAge) : undefined,
+        googleUser?.uid
       );
 
       if (result) {
@@ -115,7 +178,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       padding: '1rem'
     }}>
       {currentMember && currentFamily ? (
-        // Already logged in - show status card with logout option
         <div className="glass-card animate-fade-in" style={{ padding: '2rem', maxWidth: '500px', width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
             <div style={{
@@ -167,7 +229,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </button>
         </div>
       ) : (
-        // Not logged in - show forms
         <div className="glass-card animate-fade-in" style={{
           padding: '2.5rem',
           maxWidth: '550px',
@@ -185,53 +246,35 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </div>
 
           {/* Tab Navigation */}
-          <div style={{
-            display: 'flex',
-            borderBottom: '1px solid var(--border-color)',
-            marginBottom: '1.5rem'
-          }}>
-            <button
-              onClick={() => { setTab('quick'); setNewFamilyDetails(null); }}
-              style={{
-                flex: 1,
-                padding: '0.75rem',
-                border: 'none',
-                background: 'none',
-                borderBottom: tab === 'quick' ? '2px solid var(--primary-color)' : 'none',
-                color: tab === 'quick' ? 'var(--primary-color)' : 'var(--text-secondary)',
-                fontWeight: tab === 'quick' ? '700' : '500',
-                cursor: 'pointer'
-              }}
-            >
-              Quick Test
-            </button>
+          <div className="tab-container" style={{ width: '100%' }}>
+            {config.mode === 'offline' ? (
+              <button
+                onClick={() => { setTab('quick'); setNewFamilyDetails(null); }}
+                className={`tab-btn ${tab === 'quick' ? 'active' : ''}`}
+                style={{ flex: 1 }}
+              >
+                Quick Test
+              </button>
+            ) : (
+              <button
+                onClick={() => { setTab('google'); setNewFamilyDetails(null); }}
+                className={`tab-btn ${tab === 'google' ? 'active' : ''}`}
+                style={{ flex: 1 }}
+              >
+                Google Sign In
+              </button>
+            )}
             <button
               onClick={() => { setTab('create'); setNewFamilyDetails(null); }}
-              style={{
-                flex: 1,
-                padding: '0.75rem',
-                border: 'none',
-                background: 'none',
-                borderBottom: tab === 'create' ? '2px solid var(--primary-color)' : 'none',
-                color: tab === 'create' ? 'var(--primary-color)' : 'var(--text-secondary)',
-                fontWeight: tab === 'create' ? '700' : '500',
-                cursor: 'pointer'
-              }}
+              className={`tab-btn ${tab === 'create' ? 'active' : ''}`}
+              style={{ flex: 1 }}
             >
               Create Family
             </button>
             <button
               onClick={() => { setTab('join'); setNewFamilyDetails(null); }}
-              style={{
-                flex: 1,
-                padding: '0.75rem',
-                border: 'none',
-                background: 'none',
-                borderBottom: tab === 'join' ? '2px solid var(--primary-color)' : 'none',
-                color: tab === 'join' ? 'var(--primary-color)' : 'var(--text-secondary)',
-                fontWeight: tab === 'join' ? '700' : '500',
-                cursor: 'pointer'
-              }}
+              className={`tab-btn ${tab === 'join' ? 'active' : ''}`}
+              style={{ flex: 1 }}
             >
               Join Family
             </button>
@@ -239,29 +282,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
           {error && (
             <div style={{
-              backgroundColor: 'rgba(239, 68, 68, 0.1)',
-              color: 'var(--danger-color)',
+              backgroundColor: error.includes('authenticated') ? 'rgba(59, 130, 246, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+              color: error.includes('authenticated') ? 'var(--primary-color)' : 'var(--danger-color)',
               padding: '0.75rem 1rem',
               borderRadius: '8px',
               fontSize: '0.85rem',
               marginBottom: '1.25rem',
               fontWeight: '600'
             }}>
-              ⚠️ {error}
+              {error.includes('authenticated') ? '✓' : '⚠️'} {error}
             </div>
           )}
 
-          {/* Quick Login Tab */}
-          {tab === 'quick' && (
+          {/* 1. Offline Quick Login */}
+          {tab === 'quick' && config.mode === 'offline' && (
             <div>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.25rem', textAlign: 'center' }}>
-                Select a family member below to log in instantly. This offline simulator includes pre-seeded data for Brayden, Emily, Mom, and Dad.
+                Select a family member below to log in instantly.
               </p>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(2, 1fr)',
-                gap: '1rem'
-              }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
                 {quickMembers.map((member) => (
                   <div
                     key={member.id}
@@ -290,8 +329,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       {member.name.substring(0, 2).toUpperCase()}
                     </div>
                     <div style={{ fontWeight: '700' }}>{member.name}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'capitalize' }}>
-                      {member.role} {member.age ? `(Age ${member.age})` : ''}
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      {member.role}
                     </div>
                   </div>
                 ))}
@@ -299,23 +338,43 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
-          {/* Create Family Tab */}
+          {/* 2. Firebase Google Sign-In */}
+          {tab === 'google' && config.mode === 'firebase' && (
+            <div style={{ textAlign: 'center' }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                Sign in with Google to access your family's live synchronized dashboard.
+              </p>
+              
+              <button 
+                onClick={handleGoogleSignIn}
+                className="btn btn-primary"
+                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem' }}
+              >
+                <LogIn size={20} /> Sign In with Google
+              </button>
+            </div>
+          )}
+
+          {/* 3. Create Family */}
           {tab === 'create' && (
             <div>
+              {googleUser && (
+                <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.05)', padding: '0.75rem', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--success-color)', marginBottom: '1rem', fontWeight: 'bold' }}>
+                  Authenticated as: {googleUser.email}
+                </div>
+              )}
               {!newFamilyDetails ? (
                 <form onSubmit={handleCreateFamily}>
                   <div className="form-group">
                     <label className="form-label">Your Name (Parent)</label>
-                    <div style={{ position: 'relative' }}>
-                      <input
-                        type="text"
-                        placeholder="e.g., Sarah Smith"
-                        value={creatorName}
-                        onChange={(e) => setCreatorName(e.target.value)}
-                        className="input-field"
-                        style={{ width: '100%' }}
-                      />
-                    </div>
+                    <input
+                      type="text"
+                      placeholder="e.g., Sarah Smith"
+                      value={creatorName}
+                      onChange={(e) => setCreatorName(e.target.value)}
+                      className="input-field"
+                      style={{ width: '100%' }}
+                    />
                   </div>
 
                   <div className="form-group">
@@ -346,7 +405,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </button>
                 </form>
               ) : (
-                // Success screen showing code
                 <div style={{ textAlign: 'center', padding: '1rem 0' }} className="animate-fade-in">
                   <div style={{
                     width: '60px',
@@ -361,14 +419,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   }}>
                     <Check size={32} />
                   </div>
-                  <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Family Created Successfully!</h3>
+                  <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Family Created!</h3>
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
-                    Share this code with other family members (spouse, children) so they can join your family dashboard.
+                    Share this invite code with other family members so they can join.
                   </p>
 
                   <div className="glass-panel" style={{ padding: '1.5rem', borderRadius: '12px', margin: '0 auto 1.5rem' }}>
                     <div style={{ textTransform: 'uppercase', fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                      Family Invite Code
+                      Invite Code
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
                       <span style={{ fontSize: '1.75rem', fontWeight: '800', letterSpacing: '2px', color: 'var(--accent-gold)' }}>
@@ -396,9 +454,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
-          {/* Join Family Tab */}
+          {/* 4. Join Family */}
           {tab === 'join' && (
             <form onSubmit={handleJoinFamily}>
+              {googleUser && (
+                <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.05)', padding: '0.75rem', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--success-color)', marginBottom: '1rem', fontWeight: 'bold' }}>
+                  Authenticated as: {googleUser.email}
+                </div>
+              )}
               <div className="form-group">
                 <label className="form-label">Invite Code</label>
                 <input
@@ -423,35 +486,33 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '1rem' }}>
-                <div className="form-group">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Role</label>
                   <select
                     value={joinRole}
-                    onChange={(e) => setJoinRole(e.target.value as 'parent' | 'child')}
+                    onChange={(e) => setJoinRole(e.target.value as any)}
                     className="input-field"
-                    style={{ width: '100%', height: '45px' }}
+                    style={{ width: '100%', height: '42px' }}
                   >
                     <option value="child">Child</option>
                     <option value="parent">Parent</option>
                   </select>
                 </div>
-
-                <div className="form-group">
-                  <label className="form-label">Age (For children)</label>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Age (Optional)</label>
                   <input
                     type="number"
-                    placeholder="e.g. 10"
+                    placeholder="e.g. 14"
                     value={joinAge}
                     onChange={(e) => setJoinAge(e.target.value)}
-                    disabled={joinRole === 'parent'}
                     className="input-field"
                     style={{ width: '100%' }}
                   />
                 </div>
               </div>
 
-              <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '1rem' }}>
+              <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
                 Join Family Dashboard
               </button>
             </form>

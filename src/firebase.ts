@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import type { Auth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import type { Firestore } from 'firebase/firestore';
@@ -8,6 +8,7 @@ import { config } from './config';
 let app: any = null;
 let auth: Auth | null = null;
 let db: Firestore | null = null;
+let googleProvider: GoogleAuthProvider | null = null;
 
 if (config.mode === 'firebase') {
   try {
@@ -17,6 +18,7 @@ if (config.mode === 'firebase') {
       app = initializeApp(config.firebaseConfig);
       auth = getAuth(app);
       db = getFirestore(app);
+      googleProvider = new GoogleAuthProvider();
     } else {
       console.warn("Firebase config contains placeholders. Running in fallback mode. Change config.mode to 'offline' or paste real keys.");
     }
@@ -25,4 +27,4 @@ if (config.mode === 'firebase') {
   }
 }
 
-export { app, auth, db };
+export { app, auth, db, googleProvider };
