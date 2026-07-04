@@ -137,9 +137,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       return;
     }
 
-    if (createUsername || createPassword) {
+    if (!googleUser) {
       if (!createUsername || !createPassword) {
-        setError('If setting up username login, please provide both username and password.');
+        setError('Please provide a username and password to secure this family account.');
+        return;
+      }
+      if (createUsername.length < 3) {
+        setError('Username must be at least 3 characters long.');
+        return;
+      }
+      if (createPassword.length < 6) {
+        setError('Password must be at least 6 characters long.');
         return;
       }
       try {
@@ -183,9 +191,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       return;
     }
 
-    if (joinUsername || joinPassword) {
+    if (!googleUser) {
       if (!joinUsername || !joinPassword) {
-        setError('If setting up username login, please provide both username and password.');
+        setError('Please provide a username and password to secure your member account.');
+        return;
+      }
+      if (joinUsername.length < 3) {
+        setError('Username must be at least 3 characters long.');
+        return;
+      }
+      if (joinPassword.length < 6) {
+        setError('Password must be at least 6 characters long.');
         return;
       }
       try {
@@ -525,30 +541,52 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         />
                       </div>
 
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
-                        <div className="form-group">
-                          <label className="form-label">Username (Optional)</label>
-                          <input
-                            type="text"
-                            placeholder="Choose username"
-                            value={createUsername}
-                            onChange={(e) => setCreateUsername(e.target.value)}
-                            className="input-field"
-                            style={{ width: '100%' }}
-                          />
+                      {!googleUser ? (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
+                          <div className="form-group">
+                            <label className="form-label" style={{ fontWeight: '600' }}>
+                              Username <span style={{ color: 'var(--danger-color)' }}>*</span>
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Choose username (min 3 chars)"
+                              value={createUsername}
+                              onChange={(e) => setCreateUsername(e.target.value)}
+                              className="input-field"
+                              style={{ width: '100%', borderColor: createUsername && createUsername.length < 3 ? 'var(--danger-color)' : 'var(--border-color)' }}
+                              required
+                            />
+                            {createUsername && createUsername.length < 3 && (
+                              <span style={{ fontSize: '0.75rem', color: 'var(--danger-color)', display: 'block', marginTop: '0.25rem' }}>
+                                Min 3 characters
+                              </span>
+                            )}
+                          </div>
+                          <div className="form-group">
+                            <label className="form-label" style={{ fontWeight: '600' }}>
+                              Password <span style={{ color: 'var(--danger-color)' }}>*</span>
+                            </label>
+                            <input
+                              type="password"
+                              placeholder="Choose password (min 6 chars)"
+                              value={createPassword}
+                              onChange={(e) => setCreatePassword(e.target.value)}
+                              className="input-field"
+                              style={{ width: '100%', borderColor: createPassword && createPassword.length < 6 ? 'var(--danger-color)' : 'var(--border-color)' }}
+                              required
+                            />
+                            {createPassword && createPassword.length < 6 && (
+                              <span style={{ fontSize: '0.75rem', color: 'var(--danger-color)', display: 'block', marginTop: '0.25rem' }}>
+                                Min 6 characters
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div className="form-group">
-                          <label className="form-label">Password (Optional)</label>
-                          <input
-                            type="password"
-                            placeholder="Choose password"
-                            value={createPassword}
-                            onChange={(e) => setCreatePassword(e.target.value)}
-                            className="input-field"
-                            style={{ width: '100%' }}
-                          />
+                      ) : (
+                        <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem', color: 'var(--success-color)', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                          ✓ Linked to Google Account ({googleUser.email}). No username or password required.
                         </div>
-                      </div>
+                      )}
 
                       <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
                         Create Family & Get Invite Code
@@ -659,30 +697,52 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     </select>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
-                    <div className="form-group">
-                      <label className="form-label">Username (Optional)</label>
-                      <input
-                        type="text"
-                        placeholder="Choose username"
-                        value={joinUsername}
-                        onChange={(e) => setJoinUsername(e.target.value)}
-                        className="input-field"
-                        style={{ width: '100%' }}
-                      />
+                  {!googleUser ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
+                      <div className="form-group">
+                        <label className="form-label" style={{ fontWeight: '600' }}>
+                          Username <span style={{ color: 'var(--danger-color)' }}>*</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Choose username (min 3 chars)"
+                          value={joinUsername}
+                          onChange={(e) => setJoinUsername(e.target.value)}
+                          className="input-field"
+                          style={{ width: '100%', borderColor: joinUsername && joinUsername.length < 3 ? 'var(--danger-color)' : 'var(--border-color)' }}
+                          required
+                        />
+                        {joinUsername && joinUsername.length < 3 && (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--danger-color)', display: 'block', marginTop: '0.25rem' }}>
+                            Min 3 characters
+                          </span>
+                        )}
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label" style={{ fontWeight: '600' }}>
+                          Password <span style={{ color: 'var(--danger-color)' }}>*</span>
+                        </label>
+                        <input
+                          type="password"
+                          placeholder="Choose password (min 6 chars)"
+                          value={joinPassword}
+                          onChange={(e) => setJoinPassword(e.target.value)}
+                          className="input-field"
+                          style={{ width: '100%', borderColor: joinPassword && joinPassword.length < 6 ? 'var(--danger-color)' : 'var(--border-color)' }}
+                          required
+                        />
+                        {joinPassword && joinPassword.length < 6 && (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--danger-color)', display: 'block', marginTop: '0.25rem' }}>
+                            Min 6 characters
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="form-group">
-                      <label className="form-label">Password (Optional)</label>
-                      <input
-                        type="password"
-                        placeholder="Choose password"
-                        value={joinPassword}
-                        onChange={(e) => setJoinPassword(e.target.value)}
-                        className="input-field"
-                        style={{ width: '100%' }}
-                      />
+                  ) : (
+                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem', color: 'var(--success-color)', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                      ✓ Linked to Google Account ({googleUser.email}). No username or password required.
                     </div>
-                  </div>
+                  )}
 
                   <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
                     Join Family Dashboard

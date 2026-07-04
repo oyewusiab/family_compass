@@ -59,6 +59,18 @@ export const AICoach: React.FC<AICoachProps> = ({
   const [diagnostics, setDiagnostics] = useState<SpiritualDiagnostic[]>([]);
   const [activeDiagnostic, setActiveDiagnostic] = useState<SpiritualDiagnostic | null>(null);
 
+  // Tab 2 Live Metrics States
+  interface WeeklyMetrics {
+    scriptureRate: number;
+    prayerRate: number;
+    choreRate: number;
+    councilsCount: number;
+    activeGoalsCount: number;
+    councilsHeldLast7Days: boolean;
+  }
+  const [weeklyMetrics, setWeeklyMetrics] = useState<WeeklyMetrics | null>(null);
+  const [loadingMetrics, setLoadingMetrics] = useState(false);
+
   // Tab 3: Pioneer Generator States
   const [ancestors, setAncestors] = useState<AncestorStory[]>([]);
   const [selectedAncestorId, setSelectedAncestorId] = useState('');
@@ -83,6 +95,94 @@ export const AICoach: React.FC<AICoachProps> = ({
     };
     loadData();
   }, [currentFamily.id, refreshTrigger]);
+
+  // Load and calculate weekly performance metrics
+  useEffect(() => {
+    const fetchMetrics = async () => {
+      if (activeSubTab !== 'diagnostic') return;
+      setLoadingMetrics(true);
+      try {
+        const d = new Date();
+        d.setDate(d.getDate() - 6);
+        const startDate = d.toISOString().split('T')[0];
+        const endDate = new Date().toISOString().split('T')[0];
+
+        const [activities, chores, councils, goals] = await Promise.all([
+          dbService.getDailyActivitiesRange(currentFamily.id, startDate, endDate),
+          dbService.getChores(currentFamily.id),
+          dbService.getFamilyCouncils(currentFamily.id),
+          dbService.getGoals(currentFamily.id)
+        ]);
+
+        // 1. Scripture Rate (completed scriptures / possible scripture records in activities)
+        const totalScripturesPossible = activities.length * 2;
+        const completedScriptures = activities.reduce((acc, act) => {
+          let count = 0;
+          if (act.scripturePersonal) count++;
+          if (act.scriptureFamily) count++;
+          return acc + count;
+        }, 0);
+        const scriptureRate = totalScripturesPossible > 0 ? Math.round((completedScriptures / totalScripturesPossible) * 100) : 0;
+
+        // 2. Prayer Rate (completed prayers / possible prayer records in activities)
+        const totalPrayersPossible = activities.length * 2;
+        const completedPrayers = activities.reduce((acc, act) => {
+          let count = 0;
+          if (act.prayerMorning) count++;
+          if (act.prayerEvening) count++;
+          return acc + count;
+        }, 0);
+        const prayerRate = totalPrayersPossible > 0 ? Math.round((completedPrayers / totalPrayersPossible) * 100) : 0;
+
+        // 3. Chore Rate
+        const assignedChores = chores.filter(c => c.assignedTo !== null);
+        const totalChoresCount = assignedChores.length;
+        const completedChores = assignedChores.filter(c => c.status === 'completed' || c.status === 'verified').length;
+        const choreRate = totalChoresCount > 0 ? Math.round((completedChores / totalChoresCount) * 100) : 100;
+
+        // 4. Councils Held
+        const recentCouncils = councils.filter(c => c.meetingDate >= startDate && c.meetingDate <= endDate);
+        const councilsCount = recentCouncils.length;
+        const councilsHeldLast7Days = councilsCount > 0;
+
+        // 5. Active Goals
+        const activeGoalsCount = goals.filter(g => g.status === 'in_progress').length;
+
+        const metricsObj: WeeklyMetrics = {
+          scriptureRate,
+          prayerRate,
+          choreRate,
+          councilsCount,
+          activeGoalsCount,
+          councilsHeldLast7Days
+        };
+
+        setWeeklyMetrics(metricsObj);
+
+        // Pre-populate/suggest sliders based on this actual data
+        let suggestedUnity = 5;
+        if (councilsHeldLast7Days) suggestedUnity += 2;
+        suggestedUnity += Math.round((prayerRate / 100) * 3);
+        suggestedUnity = Math.min(10, Math.max(1, suggestedUnity));
+        setUnityRating(suggestedUnity);
+
+        const suggestedStudy = Math.min(10, Math.max(1, Math.round(scriptureRate / 10)));
+        setStudyRating(suggestedStudy);
+
+        let suggestedStress = 6;
+        suggestedStress -= Math.round((choreRate / 100) * 3);
+        if (chores.filter(c => c.status === 'pending').length > 3) suggestedStress += 2;
+        suggestedStress = Math.min(10, Math.max(1, suggestedStress));
+        setStressRating(suggestedStress);
+
+      } catch (err) {
+        console.error("Error calculating weekly metrics:", err);
+      } finally {
+        setLoadingMetrics(false);
+      }
+    };
+    fetchMetrics();
+  }, [currentFamily.id, refreshTrigger, activeSubTab]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -130,32 +230,42 @@ export const AICoach: React.FC<AICoachProps> = ({
     setSuccess('');
 
     setTimeout(async () => {
+      let metricsSummary = "";
+      if (weeklyMetrics) {
+        metricsSummary = `📊 **Family Activity Metrics (Last 7 Days):**\n` +
+          `- **Scripture Study**: ${weeklyMetrics.scriptureRate}% consistency\n` +
+          `- **Family Prayers**: ${weeklyMetrics.prayerRate}% completed\n` +
+          `- **Chore Completion**: ${weeklyMetrics.choreRate}% accomplished\n` +
+          `- **Family Councils Held**: ${weeklyMetrics.councilsHeldLast7Days ? 'Yes (1)' : 'No (0)'}\n` +
+          `- **Active Goals**: ${weeklyMetrics.activeGoalsCount} in progress\n\n`;
+      }
+
       let diagnosis = '';
       let recommendations: string[] = [];
 
       if (unityRating >= 8 && stressRating <= 3) {
-        diagnosis = "Your family is experiencing high spiritual alignment and low temporal stress. Excellent work! This is a celestial season to focus on reaching outward.";
+        diagnosis = `${metricsSummary}Your family is experiencing high spiritual alignment and low temporal stress. Excellent work! This is a celestial season to focus on reaching outward.`;
         recommendations = [
           "Organize a secret service challenge for siblings.",
-          "Invite a neighbors family to your next FHE dessert night.",
+          "Invite a neighbor's family to your next FHE dessert night.",
           "Plan a temple sealing trip for parents or proxy baptisms for youth."
         ];
       } else if (stressRating >= 7) {
-        diagnosis = "Friction Alert: High temporal stress is squeezing out time for gospel connections and study. Your family needs rest, reset, and shared recreation.";
+        diagnosis = `${metricsSummary}Friction Alert: High temporal stress is squeezing out time for gospel connections and study. Your family needs rest, reset, and shared recreation.`;
         recommendations = [
           "Hold a brief Family Council to delegate/reduce chores for a week.",
           "Use the FHE sing-along playlist for a relaxing devotional instead of a long lesson.",
           "Clear the Gratitude Jar during dinner to remind everyone of family support."
         ];
       } else if (studyRating <= 5) {
-        diagnosis = "Gospel study consistency is low. Family members might feel study sessions are passive or too long.";
+        diagnosis = `${metricsSummary}Gospel study consistency is low. Family members might feel study sessions are passive or too long.`;
         recommendations = [
           "Use the Scripture Doodle canvas to make weekly CFM study interactive.",
           "Set a visual 5-minute timer and read only three verses per day.",
           "Award 50 points to children when they complete the Scripture Memory blank-fill challenges."
         ];
       } else {
-        diagnosis = "Your family is maintaining steady habits, but there is room to build deeper gospel study enjoyment and reduce sibling friction.";
+        diagnosis = `${metricsSummary}Your family is maintaining steady habits, but there is room to build deeper gospel study enjoyment and reduce sibling friction.`;
         recommendations = [
           "Use age-filtered discussion starter cards during dinner.",
           "Conduct a Safety Drill / Emergency prep evening to build teamwork.",
@@ -403,6 +513,64 @@ export const AICoach: React.FC<AICoachProps> = ({
                   {isThinking ? 'Analyzing Metrics...' : 'Analyze Family Health'}
                 </button>
               </div>
+            </div>
+
+            {/* Real performance metrics card */}
+            <div className="glass-card" style={{ gridColumn: 'span 4', padding: '1.5rem', height: 'fit-content' }}>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: '700', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                📊 Weekly Performance Stats
+              </h3>
+              
+              {loadingMetrics ? (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', padding: '1rem 0' }}>
+                  Loading real-time metrics...
+                </div>
+              ) : weeklyMetrics ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                    <span style={{ fontSize: '0.85rem' }}>📖 Scripture Study</span>
+                    <strong style={{ fontSize: '0.9rem', color: weeklyMetrics.scriptureRate > 70 ? 'var(--success-color)' : 'var(--text-primary)' }}>
+                      {weeklyMetrics.scriptureRate}%
+                    </strong>
+                  </div>
+                  
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                    <span style={{ fontSize: '0.85rem' }}>🙏 Family Prayers</span>
+                    <strong style={{ fontSize: '0.9rem', color: weeklyMetrics.prayerRate > 70 ? 'var(--success-color)' : 'var(--text-primary)' }}>
+                      {weeklyMetrics.prayerRate}%
+                    </strong>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                    <span style={{ fontSize: '0.85rem' }}>🧹 Chore Completion</span>
+                    <strong style={{ fontSize: '0.9rem', color: weeklyMetrics.choreRate > 70 ? 'var(--success-color)' : 'var(--text-primary)' }}>
+                      {weeklyMetrics.choreRate}%
+                    </strong>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                    <span style={{ fontSize: '0.85rem' }}>🏛️ Councils Logged</span>
+                    <strong style={{ fontSize: '0.9rem', color: weeklyMetrics.councilsHeldLast7Days ? 'var(--success-color)' : 'var(--text-primary)' }}>
+                      {weeklyMetrics.councilsCount}
+                    </strong>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                    <span style={{ fontSize: '0.85rem' }}>🎯 Active Goals</span>
+                    <strong style={{ fontSize: '0.9rem' }}>
+                      {weeklyMetrics.activeGoalsCount}
+                    </strong>
+                  </div>
+                  
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '0.25rem', lineHeight: '1.4' }}>
+                    💡 Sliders are pre-populated and suggested based on these real metrics (last 7 days). You can adjust them if needed.
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', padding: '1rem 0' }}>
+                  No metrics available. Log more daily activities to see results!
+                </div>
+              )}
             </div>
 
             {/* Results Drawer */}

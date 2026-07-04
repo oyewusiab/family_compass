@@ -44,7 +44,14 @@ export const App: React.FC = () => {
   const [coachSubTab, setCoachSubTab] = useState('coach');
   const [choreMarketSubTab, setChoreMarketSubTab] = useState('market');
 
-
+  // Profile Swapper States
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [selectedSwapMember, setSelectedSwapMember] = useState<Member | null>(null);
+  const [swapPassword, setSwapPassword] = useState('');
+  const [swapError, setSwapError] = useState('');
+  const [isSettingUpPassword, setIsSettingUpPassword] = useState(false);
+  const [setupNewPassword, setSetupNewPassword] = useState('');
+  const [setupNewPasswordConfirm, setSetupNewPasswordConfirm] = useState('');
   // Restore session from LocalStorage on mount
   useEffect(() => {
     const savedFam = localStorage.getItem('fc_current_family');
@@ -106,13 +113,94 @@ export const App: React.FC = () => {
     setActiveTab('auth');
   };
 
-  const handleProfileSwap = (memberId: string) => {
-    const selected = allMembers.find(m => m.id === memberId);
-    if (selected && currentFamily) {
-      setCurrentMember(selected);
-      localStorage.setItem('fc_current_member', JSON.stringify(selected));
-      setRefreshTrigger(prev => prev + 1);
+  const handleProfileClick = (targetMember: Member) => {
+    if (!currentFamily || !currentMember) return;
+    
+    // 1. Same user? Just close modal.
+    if (targetMember.id === currentMember.id) {
+      setIsProfileModalOpen(false);
+      return;
     }
+
+    // 2. Parent admin bypass? Parents can switch to kids/grandparents without password/credentials.
+    const isCurrentParent = currentMember.role === 'parent';
+    const isTargetKid = targetMember.role === 'child' || targetMember.role === 'grandparent';
+    
+    if (isCurrentParent && isTargetKid) {
+      performProfileSwap(targetMember);
+      return;
+    }
+
+    // 3. Does target have credentials?
+    if (targetMember.password) {
+      setSelectedSwapMember(targetMember);
+      setIsSettingUpPassword(false);
+      setSwapPassword('');
+      setSwapError('');
+    } else {
+      // Profile has no credentials.
+      setSelectedSwapMember(targetMember);
+      setIsSettingUpPassword(true);
+      setSetupNewPassword('');
+      setSetupNewPasswordConfirm('');
+      setSwapError('');
+    }
+  };
+
+  const performProfileSwap = (targetMember: Member) => {
+    setCurrentMember(targetMember);
+    localStorage.setItem('fc_current_member', JSON.stringify(targetMember));
+    setIsProfileModalOpen(false);
+    setSelectedSwapMember(null);
+    setSwapPassword('');
+    setSwapError('');
+    setRefreshTrigger(prev => prev + 1);
+  };
+
+  const handleVerifySwapPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSwapMember) return;
+    if (selectedSwapMember.password === swapPassword) {
+      performProfileSwap(selectedSwapMember);
+    } else {
+      setSwapError('Incorrect password or PIN. Please try again.');
+    }
+  };
+
+  const handleSetupSwapPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSwapMember || !currentFamily) return;
+    if (!setupNewPassword) {
+      setSwapError('Please enter a password.');
+      return;
+    }
+    if (setupNewPassword.length < 6) {
+      setSwapError('Password must be at least 6 characters long.');
+      return;
+    }
+    if (setupNewPassword !== setupNewPasswordConfirm) {
+      setSwapError('Passwords do not match.');
+      return;
+    }
+
+    try {
+      const updated = await dbService.updateMember(currentFamily.id, selectedSwapMember.id, {
+        password: setupNewPassword
+      });
+      
+      // Update our local state of members
+      setAllMembers(prev => prev.map(m => m.id === updated.id ? updated : m));
+      
+      // Complete the swap
+      performProfileSwap(updated);
+    } catch (err: any) {
+      setSwapError(err.message || 'Failed to update profile password.');
+    }
+  };
+
+  const handleSkipPasswordSetup = () => {
+    if (!selectedSwapMember) return;
+    performProfileSwap(selectedSwapMember);
   };
 
   const toggleTheme = () => {
@@ -157,30 +245,29 @@ export const App: React.FC = () => {
 
             {/* Profile Quick Swapper */}
             <div style={{ marginTop: '0.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.5rem' }}>
-              <label style={{ fontSize: '0.65rem', fontWeight: 'bold', color: 'var(--text-muted)', display: 'block', marginBottom: '0.2rem' }}>
-                Profile Quick-Swap
-              </label>
-              <select
-                value={currentMember.id}
-                onChange={(e) => handleProfileSwap(e.target.value)}
+              <button 
+                onClick={() => {
+                  setSelectedSwapMember(null);
+                  setSwapPassword('');
+                  setSwapError('');
+                  setIsProfileModalOpen(true);
+                }}
+                className="btn btn-secondary"
                 style={{
                   width: '100%',
-                  padding: '0.3rem',
+                  padding: '0.45rem',
                   fontSize: '0.75rem',
-                  borderRadius: '6px',
-                  backgroundColor: 'var(--bg-primary)',
-                  color: 'var(--text-primary)',
-                  border: '1px solid var(--border-color)',
-                  outline: 'none',
-                  cursor: 'pointer'
+                  borderRadius: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.35rem',
+                  cursor: 'pointer',
+                  fontWeight: '600'
                 }}
               >
-                {allMembers.map(m => (
-                  <option key={m.id} value={m.id}>
-                    {m.name} ({m.role === 'parent' ? 'Parent' : 'Child'})
-                  </option>
-                ))}
-              </select>
+                🔄 Switch Profile
+              </button>
             </div>
           </div>
         )}
@@ -539,6 +626,247 @@ export const App: React.FC = () => {
           )
         )}
       </main>
+      {/* Switch Profile Modal */}
+      {isProfileModalOpen && currentFamily && currentMember && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.85)',
+          backdropFilter: 'blur(10px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1.5rem'
+        }} className="animate-fade-in">
+          <div className="glass-card" style={{
+            maxWidth: '600px',
+            width: '100%',
+            padding: '2.5rem',
+            textAlign: 'center',
+            boxShadow: 'var(--shadow-lg)'
+          }}>
+            {!selectedSwapMember ? (
+              <>
+                <h2 style={{ fontSize: '1.75rem', fontWeight: '800', marginBottom: '0.5rem' }}>Who's Using Family Compass?</h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '2rem' }}>
+                  Switch to your profile to track your personal goals, daily activities, and points.
+                </p>
+                
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: allMembers.length > 3 ? 'repeat(auto-fit, minmax(110px, 1fr))' : `repeat(${allMembers.length}, minmax(100px, 120px))`,
+                  gap: '1.25rem',
+                  justifyContent: 'center',
+                  marginBottom: '2rem'
+                }}>
+                  {allMembers.map(m => {
+                    const isSelected = m.id === currentMember.id;
+                    return (
+                      <div
+                        key={m.id}
+                        onClick={() => isSelected ? null : handleProfileClick(m)}
+                        style={{
+                          cursor: isSelected ? 'default' : 'pointer',
+                          padding: '1.25rem 0.5rem',
+                          borderRadius: '16px',
+                          border: isSelected ? '2px solid var(--accent-gold)' : '1px solid var(--border-color)',
+                          background: isSelected ? 'rgba(var(--accent-gold-rgb), 0.05)' : 'rgba(255, 255, 255, 0.01)',
+                          transition: 'var(--transition-smooth)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          opacity: isSelected ? 0.6 : 1
+                        }}
+                        className={isSelected ? '' : 'glass-card'}
+                      >
+                        <div style={{
+                          width: '52px',
+                          height: '52px',
+                          borderRadius: '50%',
+                          backgroundColor: m.role === 'parent' ? 'var(--primary-color)' : 'var(--accent-gold)',
+                          color: '#ffffff',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: 'bold',
+                          fontSize: '1.25rem',
+                          marginBottom: '0.75rem',
+                          position: 'relative'
+                        }}>
+                          {m.name.substring(0, 2).toUpperCase()}
+                          {m.password && (
+                            <span style={{
+                              position: 'absolute',
+                              bottom: -2,
+                              right: -2,
+                              backgroundColor: 'var(--bg-secondary)',
+                              borderRadius: '50%',
+                              padding: '2px',
+                              border: '1px solid var(--border-color)',
+                              fontSize: '0.65rem'
+                            }}>
+                              🔒
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontWeight: '700', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', width: '100%', whiteSpace: 'nowrap' }}>
+                          {m.name}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'capitalize', marginTop: '0.15rem' }}>
+                          {m.displayRole || m.role}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--accent-gold)', fontWeight: 'bold', marginTop: '0.4rem' }}>
+                          🪙 {m.points} pts
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                
+                <button
+                  onClick={() => setIsProfileModalOpen(false)}
+                  className="btn btn-secondary"
+                  style={{ minWidth: '120px' }}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : isSettingUpPassword ? (
+              <form onSubmit={handleSetupSwapPassword} className="animate-fade-in" style={{ textAlign: 'left' }}>
+                <h3 style={{ fontSize: '1.4rem', fontWeight: '800', marginBottom: '0.5rem', textAlign: 'center' }}>
+                  🔒 Secure Profile: {selectedSwapMember.name}
+                </h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem', textAlign: 'center' }}>
+                  This profile does not have credentials yet. Please set a password or PIN to secure it from unauthorized family member access.
+                </p>
+
+                {swapError && (
+                  <div style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger-color)', padding: '0.75rem', borderRadius: '8px', fontSize: '0.85rem', marginBottom: '1rem', fontWeight: 'bold' }}>
+                    ⚠️ {swapError}
+                  </div>
+                )}
+
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <label className="form-label">Create Password / PIN</label>
+                  <input
+                    type="password"
+                    placeholder="Enter new password (min 6 characters)"
+                    value={setupNewPassword}
+                    onChange={(e) => setSetupNewPassword(e.target.value)}
+                    className="input-field"
+                    style={{ width: '100%' }}
+                    autoFocus
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                  <label className="form-label">Confirm Password / PIN</label>
+                  <input
+                    type="password"
+                    placeholder="Confirm new password"
+                    value={setupNewPasswordConfirm}
+                    onChange={(e) => setSetupNewPasswordConfirm(e.target.value)}
+                    className="input-field"
+                    style={{ width: '100%' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    style={{ flex: 1 }}
+                  >
+                    Set Password & Switch
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSkipPasswordSetup}
+                    className="btn btn-secondary"
+                    style={{ flex: 1 }}
+                  >
+                    Skip & Switch (Unsecured)
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedSwapMember(null)}
+                  className="btn btn-secondary"
+                  style={{ width: '100%', marginTop: '1rem' }}
+                >
+                  ← Back to Profiles
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleVerifySwapPassword} className="animate-fade-in" style={{ textAlign: 'center' }}>
+                <div style={{
+                  width: '52px',
+                  height: '52px',
+                  borderRadius: '50%',
+                  backgroundColor: selectedSwapMember.role === 'parent' ? 'var(--primary-color)' : 'var(--accent-gold)',
+                  color: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 'bold',
+                  fontSize: '1.25rem',
+                  margin: '0 auto 1rem'
+                }}>
+                  {selectedSwapMember.name.substring(0, 2).toUpperCase()}
+                </div>
+                
+                <h3 style={{ fontSize: '1.4rem', fontWeight: '800', marginBottom: '0.5rem' }}>
+                  Enter Password / PIN
+                </h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
+                  To access <strong>{selectedSwapMember.name}</strong>'s profile, enter their security credentials.
+                </p>
+
+                {swapError && (
+                  <div style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger-color)', padding: '0.75rem', borderRadius: '8px', fontSize: '0.85rem', marginBottom: '1.25rem', fontWeight: 'bold' }}>
+                    ⚠️ {swapError}
+                  </div>
+                )}
+
+                <div className="form-group" style={{ maxWidth: '320px', margin: '0 auto 1.5rem' }}>
+                  <input
+                    type="password"
+                    placeholder="Enter password or PIN"
+                    value={swapPassword}
+                    onChange={(e) => setSwapPassword(e.target.value)}
+                    className="input-field"
+                    style={{ width: '100%', textAlign: 'center', fontSize: '1.25rem', letterSpacing: '4px' }}
+                    autoFocus
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '1rem', maxWidth: '320px', margin: '0 auto' }}>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    style={{ flex: 1 }}
+                  >
+                    Unlock Profile
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSwapMember(null)}
+                    className="btn btn-secondary"
+                    style={{ flex: 1 }}
+                  >
+                    Back
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

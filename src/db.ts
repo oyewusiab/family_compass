@@ -430,6 +430,33 @@ const baseDbService = {
     }
   },
 
+  // 6b. Update Member Profile
+  async updateMember(familyId: string, memberId: string, updates: Partial<Member>): Promise<Member> {
+    if (config.mode === 'firebase' && db) {
+      const memberRef = doc(db, `families/${familyId}/members`, memberId);
+      await updateDoc(memberRef, updates);
+      
+      // If we are updating username/password, let's also update the global usernames collection
+      if (updates.username && updates.password) {
+        const formatted = updates.username.trim().toLowerCase();
+        await setDoc(doc(db, 'usernames', formatted), { familyId, memberId, password: updates.password });
+      }
+      
+      const snap = await getDoc(memberRef);
+      if (!snap.exists()) throw new Error("Updated member not found");
+      return snap.data() as Member;
+    } else {
+      const members = loadLocal<Member[]>('members', defaultMembers);
+      const idx = members.findIndex(m => m.id === memberId && m.familyId === familyId);
+      if (idx !== -1) {
+        members[idx] = { ...members[idx], ...updates };
+        saveLocal('members', members);
+        return members[idx];
+      }
+      throw new Error("Member not found");
+    }
+  },
+
   // 7. Get Goals
   async getGoals(familyId: string): Promise<Goal[]> {
     if (config.mode === 'firebase' && db) {
@@ -714,6 +741,20 @@ const baseDbService = {
       }
       
       return filtered;
+    }
+  },
+
+  // 18b. Get Daily Activities in Date Range
+  async getDailyActivitiesRange(familyId: string, startDate: string, endDate: string): Promise<DailyActivity[]> {
+    if (config.mode === 'firebase' && db) {
+      const activitiesRef = collection(db, `families/${familyId}/activities`);
+      const querySnapshot = await getDocs(activitiesRef);
+      return querySnapshot.docs
+        .map(doc => doc.data() as DailyActivity)
+        .filter(act => act.date >= startDate && act.date <= endDate);
+    } else {
+      const activities = loadLocal<DailyActivity[]>('activities', defaultDailyActivities);
+      return activities.filter(a => a.date >= startDate && a.date <= endDate);
     }
   },
 
